@@ -29,6 +29,8 @@ Everything is read **locally**; nothing is sent anywhere. Numbers are shown as *
 
 `~` marks an estimate. The two estimates are **display-only** — only the enforced limits (Codex windows + Claude 5h) ever send a notification, so you don't get false alarms. Warning fires at 20% left, critical at 10% left.
 
+**Why is Claude an estimate but Codex exact?** Codex writes its real `used_percent` into its session logs every turn, so that number is authoritative. Claude/Anthropic never writes your limit percentage locally — only per-message token counts — and doesn't publish the actual 5h token cap. So `ccusage` can sum your tokens, but converting that into "% left" needs a ceiling we don't have; the app calibrates against your own busiest 5h block as a stand-in for the cap. That inference is what the `~` denotes.
+
 ## Requirements
 
 - **macOS** with **Xcode Command Line Tools** (`xcode-select --install`) for `swiftc`.
