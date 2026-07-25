@@ -17,7 +17,7 @@ warn at 20% left   ·   alert at 10% left
 
 The menu bar shows a small status dot per tool (green → amber → red) with the % left; the dropdown breaks each tool into its windows with a 5-cell meter.
 
-> Add a `screenshot.png` here for the repo preview.
+![usage-bar — menu bar and dropdown (sample data)](screenshot.png)
 
 ## What it shows, and how much to trust each number
 
