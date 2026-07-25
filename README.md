@@ -17,8 +17,6 @@ warn at 20% left   ·   alert at 10% left
 
 The menu bar shows a small status dot per tool (green → amber → red) with the % left; the dropdown breaks each tool into its windows with a 5-cell meter.
 
-![usage-bar — menu bar and dropdown (sample data)](screenshot.png)
-
 ## What it shows, and how much to trust each number
 
 Everything is read **locally**; nothing is sent anywhere. Numbers are shown as **% left** (like a battery — high/green is good).
