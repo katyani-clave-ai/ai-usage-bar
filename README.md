@@ -3,7 +3,7 @@
 A tiny macOS **menu-bar indicator for your Codex and Claude usage limits** — so you can glance up and see how much you have left instead of hunting through each tool. It reads your own local usage files, colors green → orange → red as you approach a limit, and pops a notification before you hit the wall.
 
 ```
-● Cdx:94 wk   ● Cld:44 wk      ← % LEFT + which window (5h / wk); each tool's tightest
+● Cdx:94 wk   ● Cld:99 5h      ← % LEFT + which window (Codex = weekly, Claude = 5h)
 ──────────────
 Codex · prolite
   ▰▰▰▰▰  Weekly   94% left   ·  resets in 5d 5h
@@ -15,7 +15,7 @@ Claude
 warn at 20% left   ·   alert at 10% left
 ```
 
-The menu bar shows a small status dot per tool (green → amber → red) with the **% left and a cadence tag** (`5h` or `wk`) for that tool's *tightest* window — so a weekly number is never mistaken for a fast-resetting 5h one. The dropdown breaks each tool into all its windows (plus any maxed per-model limit) with a 5-cell meter.
+The menu bar shows a small status dot per tool (green → amber → red) with the **% left and a cadence tag** — Codex's weekly (`wk`) and Claude's 5-hour (`5h`), the fast-moving window you actually pace against — so a weekly number is never mistaken for a 5h one. The dropdown breaks each tool into all its windows (plus any maxed per-model limit) with a 5-cell meter.
 
 ## What it shows, and how much to trust each number
 

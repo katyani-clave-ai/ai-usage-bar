@@ -327,7 +327,9 @@ def main():
         return f"● {name}:—" if w is None else f"● {name}:{left(w['pct'])} {tag(w['label'])}"
 
     cdx_t = tightest(cdx_windows)
-    cld_t = tightest(cld_windows)
+    # Claude menu-bar = its 5h (hourly) window; weekly + per-model are in the
+    # dropdown (weekly still notifies). Codex has no 5h, so it stays weekly.
+    cld_t = next((w for w in cld_windows if w["label"] == "5h"), None) or tightest(cld_windows)
     dots = f"{dot_hex(cdx_t['pct'] if cdx_t else None)},{dot_hex(cld_t['pct'] if cld_t else None)}"
     print(f"{seg('Cdx', cdx_t)}  {seg('Cld', cld_t)} | dots={dots}")
     print("---")
