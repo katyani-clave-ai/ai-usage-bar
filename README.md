@@ -3,20 +3,19 @@
 A tiny macOS **menu-bar indicator for your Codex and Claude usage limits** — so you can glance up and see how much you have left instead of hunting through each tool. It reads your own local usage files, colors green → orange → red as you approach a limit, and pops a notification before you hit the wall.
 
 ```
-● Cdx:63   ● Cld:30        ← always visible: % LEFT, one tinted dot per tool
+● Cdx:94 wk   ● Cld:44 wk      ← % LEFT + which window (5h / wk); each tool's tightest
 ──────────────
 Codex · prolite
-  ▰▰▰▱▱  5h ~     63% left   ·  resets in 46m
-  ▰▰▰▰▰  Weekly   96% left   ·  resets in 5d 6h
+  ▰▰▰▰▰  Weekly   94% left   ·  resets in 5d 5h
 Claude
-  ▰▰▱▱▱  5h       30% left   ·  resets in 42m
-  ▰▰▱▱▱  Weekly   44% left   ·  resets in 1d 20h
-  ▱▱▱▱▱  Fable     0% left   ·  maxed · resets in 1d 20h
+  ▰▰▰▰▰  5h       99% left   ·  resets in 4h 40m
+  ▰▰▱▱▱  Weekly   44% left   ·  resets in 1d 19h
+  ▱▱▱▱▱  Fable     0% left   ·  maxed · resets in 1d 19h
 ──────────────
 warn at 20% left   ·   alert at 10% left
 ```
 
-The menu bar shows a small status dot per tool (green → amber → red) with the % left; the dropdown breaks each tool into its windows with a 5-cell meter.
+The menu bar shows a small status dot per tool (green → amber → red) with the **% left and a cadence tag** (`5h` or `wk`) for that tool's *tightest* window — so a weekly number is never mistaken for a fast-resetting 5h one. The dropdown breaks each tool into all its windows (plus any maxed per-model limit) with a 5-cell meter.
 
 ## What it shows, and how much to trust each number
 
@@ -24,12 +23,11 @@ Numbers are shown as **% left** (like a battery — high/green is good).
 
 | Window | Source | Accuracy |
 |---|---|---|
-| **Codex Weekly** | exact, straight from Codex's own `rate_limits` in its local session logs | 💯 exact |
-| **Codex 5h** `~` | reconstructed from your rollout token logs (Codex stopped reporting a 5h window) | estimate |
+| **Codex Weekly** | exact, straight from Codex's own `rate_limits` in its local session logs (Codex is weekly-only for most plans now) | 💯 exact |
 | **Claude 5h / Weekly** | exact, from Claude's own usage API (the same data Claude Code's `/usage` screen shows) | 💯 exact |
-| **Claude per-model** (e.g. Fable) | exact, from that same API — shows when a specific model's weekly limit is maxed while others still have room | 💯 exact |
+| **Claude per-model** (e.g. Fable) | exact, from that same API — flags when a specific model's weekly limit is maxed while others still have room | 💯 exact |
 
-`~` marks the one estimate (Codex 5h). Warnings fire at 20% left, critical at 10% left, for every enforced limit (Codex windows, Claude 5h/weekly, and any maxed per-model limit).
+Everything shown is exact. The only estimate is a `~`-marked **fallback**: if Claude's usage endpoint is unavailable, the Claude numbers come from a rougher `ccusage` calculation instead. Warnings fire at 20% left, critical at 10% left, for every enforced limit (Codex weekly, Claude 5h/weekly, and any maxed per-model limit).
 
 **Where the numbers come from.** Codex writes its real `used_percent` into its session logs, so those are read straight off disk. Claude is read from the OAuth usage endpoint (`/api/oauth/usage`) — the exact source Claude Code's own `/usage` screen uses — via the token Claude Code already stores in your macOS Keychain. That request goes only to your own Anthropic account; nothing is sent anywhere else. If the endpoint is unavailable, it falls back to a rougher `ccusage` estimate (marked `~`).
 
@@ -76,14 +74,14 @@ Edit, then re-run `./install.sh` (or copy the file to `~/.local/share/usage-bar/
 
 A ~60-line Swift shell (`NSStatusItem`, no Dock icon) runs a Python "brain" every 60s and renders its output. The brain:
 
-- reads Codex's newest `~/.codex/sessions/**/rollout-*.jsonl` for the exact weekly `rate_limits`, and reconstructs a trailing-5h estimate from per-turn token deltas;
+- reads Codex's newest `~/.codex/sessions/**/rollout-*.jsonl` for the exact weekly `rate_limits` (Codex is weekly-only for most plans now);
 - calls Claude's `/api/oauth/usage` endpoint (token from the Keychain, cached ~2 min) for exact 5h, weekly, and per-model limits, falling back to `ccusage` if that fails;
 - fires notifications via `osascript` only when an enforced limit crosses a threshold (once per crossing).
 
 ## Limitations
 
-- The **Codex 5h** number is an **estimate** (calibrated against your own busiest 5h) — a "how close am I, roughly" signal. Everything else is exact.
-- The Claude usage endpoint is **undocumented** — it's the one Claude Code itself uses, but Anthropic could change it, at which point the app falls back to the `ccusage` estimate.
+- Everything shown is exact; the only estimate is the `ccusage` **fallback** used if Claude's usage endpoint is unavailable.
+- The Claude usage endpoint is **undocumented** — it's the one Claude Code itself uses, but Anthropic could change it, at which point the app falls back to that `ccusage` estimate.
 - Depends on Codex/Claude local formats and that endpoint; a future change to either could require an update.
 - Because notifications fire through `osascript`, the banner's sender label reads as *Script Editor* rather than *usage-bar* (avoiding that needs a signed `.app` bundle).
 

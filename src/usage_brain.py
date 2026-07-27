@@ -119,57 +119,6 @@ def _iso_epoch(s):
         return None
 
 
-# ---- Codex 5h (estimate) --------------------------------------------------
-# Codex now only reports a weekly window (secondary/5h comes back null), so we
-# reconstruct the 5h burn ourselves: sum per-turn token deltas from the rollout
-# logs over the trailing 5h, expressed as a % of your peak 5h bucket.
-def codex_5h_estimate(window_secs=5 * 3600, days=10):
-    roots = os.path.expanduser("~/.codex/sessions")
-    files = glob.glob(os.path.join(roots, "**", "rollout-*.jsonl"), recursive=True)
-    now = time.time()
-    cutoff = now - days * 86400
-    events = []  # (epoch, delta_tokens)
-    for path in files:
-        try:
-            if os.path.getmtime(path) < cutoff:
-                continue
-        except OSError:
-            continue
-        try:
-            with open(path, "r", errors="replace") as fh:
-                for line in fh:
-                    if '"token_count"' not in line:
-                        continue
-                    try:
-                        d = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    payload = d.get("payload") or {}
-                    if payload.get("type") != "token_count":
-                        continue
-                    ep = _iso_epoch(d.get("timestamp"))
-                    if ep is None or ep < cutoff:
-                        continue
-                    last = (payload.get("info") or {}).get("last_token_usage") or {}
-                    events.append((ep, last.get("total_tokens") or 0))
-        except OSError:
-            continue
-    if not events:
-        return None
-    current = sum(dl for ep, dl in events if ep >= now - window_secs)
-    win = [ep for ep, dl in events if ep >= now - window_secs]
-    buckets = {}
-    for ep, dl in events:
-        buckets.setdefault(int(ep // window_secs), 0)
-        buckets[int(ep // window_secs)] += dl
-    cur_b = int(now // window_secs)
-    past = [v for b, v in buckets.items() if b != cur_b]
-    cap = max(max(past, default=0), 1)
-    # rolling window: the oldest usage ages out (pressure eases) 5h after it
-    reset = min(win) + window_secs if win else None
-    return {"pct": round(current / cap * 100), "reset": reset}
-
-
 # ---- Claude (exact via the OAuth usage endpoint; ccusage as fallback) ------
 USAGE_CACHE = os.path.expanduser(f"~/.local/state/{APP}/usage-api.json")
 
@@ -334,15 +283,11 @@ def main():
     def disp(label):
         return "Weekly" if label == "wk" else "5h"
 
-    # ---- Codex windows: exact weekly, plus 5h (exact if Codex reports it,
-    #      otherwise our own trailing-5h estimate) ----
+    # ---- Codex windows: only what Codex actually enforces (weekly; plus a real
+    #      5h only if Codex reports one). We no longer fabricate a 5h estimate —
+    #      Codex is weekly-only for most plans now, so a fake 5h would mislead. ----
     cdx_windows = list(cdx.get("windows", []))
-    if not any(w.get("label") == "5h" for w in cdx_windows):
-        est = codex_5h_estimate()
-        if est is not None:
-            cdx_windows.append({"label": "5h", "pct": est["pct"],
-                                "resets": est.get("reset"), "est": True})
-    cdx_windows.sort(key=lambda w: 0 if w["label"] == "5h" else 1)  # 5h first
+    cdx_windows.sort(key=lambda w: 0 if w["label"] == "5h" else 1)  # 5h first if any
 
     claude_ok = bool(cld.get("ok") and cld.get("windows"))
     cld_windows = cld.get("windows", []) if claude_ok else []
@@ -363,35 +308,28 @@ def main():
             notify_items.append((f"claude-{s['name']}", f"Claude {s['name']}", s["pct"]))
     maybe_notify(notify_items)
 
-    # ---- menu-bar title: each tool's 5h window (fast, session-level, and
-    #      consistent). COLOR reflects the worst of ALL windows so a low weekly
-    #      still turns the dot orange/red at a glance. ----
-    def window_pct(windows, label):
-        return next((w["pct"] for w in windows if w["label"] == label), None)
-
-    cdx_5h = window_pct(cdx_windows, "5h")
-    cdx_pct = cdx_5h if cdx_5h is not None else window_pct(cdx_windows, "wk")
-    cdx_worst = max([w["pct"] for w in cdx_windows], default=None)
-    # Claude menu-bar number = 5h; dot colour = worst OVERALL window (5h/weekly),
-    # NOT the per-model scoped ones (so a maxed Fable doesn't falsely go red).
-    cld_pct = window_pct(cld_windows, "5h")
-    if cld_pct is None and cld_windows:
-        cld_pct = cld_windows[0]["pct"]
-    cld_worst = max([w["pct"] for w in cld_windows], default=None)
-
     def left(pct):                       # battery-style: how much headroom remains
         return max(0, 100 - pct)
 
-    # Menu-bar: a clean status dot PER TOOL, coloured by that tool's worst window
-    # (Swift tints each "●" from the `dots=` param), then the % left. Grey = no data.
+    # ---- menu-bar title: per tool, show the TIGHTEST window (least headroom) with
+    #      a cadence tag (5h / wk), so a weekly number is never mistaken for a
+    #      fast-resetting one. Per-model scoped limits show only in the dropdown. ----
+    def tightest(windows):
+        return max(windows, key=lambda w: w["pct"], default=None)
+
+    def tag(label):
+        return "wk" if label == "wk" else "5h"
+
     def dot_hex(pct):
         return "#9aa0a6" if pct is None else color_for(pct)
 
-    def seg(name, num_pct):
-        return f"● {name}:{'—' if num_pct is None else left(num_pct)}"
+    def seg(name, w):
+        return f"● {name}:—" if w is None else f"● {name}:{left(w['pct'])} {tag(w['label'])}"
 
-    dots = f"{dot_hex(cdx_worst)},{dot_hex(cld_worst)}"
-    print(f"{seg('Cdx', cdx_pct)}  {seg('Cld', cld_pct)} | dots={dots}")
+    cdx_t = tightest(cdx_windows)
+    cld_t = tightest(cld_windows)
+    dots = f"{dot_hex(cdx_t['pct'] if cdx_t else None)},{dot_hex(cld_t['pct'] if cld_t else None)}"
+    print(f"{seg('Cdx', cdx_t)}  {seg('Cld', cld_t)} | dots={dots}")
     print("---")
 
     def wrow(pct, label, est, tail):     # dropdown data row
