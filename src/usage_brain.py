@@ -151,6 +151,7 @@ def codex_5h_estimate(window_secs=5 * 3600, days=10):
     if not events:
         return None
     current = sum(dl for ep, dl in events if ep >= now - window_secs)
+    win = [ep for ep, dl in events if ep >= now - window_secs]
     buckets = {}
     for ep, dl in events:
         buckets.setdefault(int(ep // window_secs), 0)
@@ -158,7 +159,9 @@ def codex_5h_estimate(window_secs=5 * 3600, days=10):
     cur_b = int(now // window_secs)
     past = [v for b, v in buckets.items() if b != cur_b]
     cap = max(max(past, default=0), 1)
-    return {"pct": round(current / cap * 100)}
+    # rolling window: the oldest usage ages out (pressure eases) 5h after it
+    reset = min(win) + window_secs if win else None
+    return {"pct": round(current / cap * 100), "reset": reset}
 
 
 # ---- Claude (estimate via ccusage) ----------------------------------------
@@ -263,7 +266,7 @@ def main():
         est = codex_5h_estimate()
         if est is not None:
             cdx_windows.append({"label": "5h", "pct": est["pct"],
-                                "resets": None, "est": True})
+                                "resets": est.get("reset"), "est": True})
     cdx_windows.sort(key=lambda w: 0 if w["label"] == "5h" else 1)  # 5h first
 
     claude_ok = cld.get("ok") and not cld.get("empty")
