@@ -95,7 +95,7 @@ final class Indicator: NSObject, NSApplicationDelegate {
                     if ch == "▰" {
                         mstr.addAttribute(.foregroundColor, value: rc, range: NSRange(location: loc, length: len))
                     } else if ch == "▱" {
-                        mstr.addAttribute(.foregroundColor, value: NSColor(white: 0.72, alpha: 1), range: NSRange(location: loc, length: len))
+                        mstr.addAttribute(.foregroundColor, value: rc.withAlphaComponent(0.28), range: NSRange(location: loc, length: len))
                     }
                     loc += len
                 }

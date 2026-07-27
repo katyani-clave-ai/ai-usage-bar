@@ -7,11 +7,13 @@ are to your Codex and Claude usage limits. The Swift shell renders this output;
 Everything is read from your own machine; nothing leaves it.
 
 Data sources
-  Codex weekly : exact — newest ~/.codex/sessions/.../rollout-*.jsonl
-                 `token_count` event, which Codex writes with real rate_limits.
-  Codex 5h     : estimate — reconstructed from rollout token deltas (trailing 5h
-                 vs your busiest 5h), since Codex no longer reports a 5h window.
-  Claude 5h    : estimate — via `ccusage`: the active 5h block vs your peak block.
+  Codex weekly    : exact — newest ~/.codex/sessions/.../rollout-*.jsonl
+                    `token_count` event, which Codex writes with real rate_limits.
+  Codex 5h        : estimate — reconstructed from rollout token deltas (trailing
+                    5h vs your busiest 5h), since Codex no longer reports a 5h.
+  Claude 5h/weekly: exact — the OAuth /usage endpoint (same data Claude Code's
+                    /usage screen shows), including per-model limits. Falls back
+                    to a `ccusage` estimate if the endpoint is unavailable.
 
 Percentages are shown as "% left" (battery-style). Estimates are marked "~".
 Thresholds: WARN at USED >= 80% (<=20% left), ALERT at USED >= 90% (<=10% left).
@@ -23,6 +25,7 @@ import os
 import shutil
 import subprocess
 import time
+import urllib.request
 
 # ---- config ---------------------------------------------------------------
 WARN = 80          # % used -> orange + first notification (20% left)
@@ -59,7 +62,10 @@ def fmt_reset(epoch):
     secs = int(epoch - time.time())
     if secs <= 0:
         return "resets now"
-    h, m = secs // 3600, (secs % 3600) // 60
+    d, rem = divmod(secs, 86400)
+    h, m = rem // 3600, (rem % 3600) // 60
+    if d:
+        return f"resets in {d}d {h}h"
     return f"resets in {h}h{m:02d}m" if h else f"resets in {m}m"
 
 
@@ -164,8 +170,77 @@ def codex_5h_estimate(window_secs=5 * 3600, days=10):
     return {"pct": round(current / cap * 100), "reset": reset}
 
 
-# ---- Claude (estimate via ccusage) ----------------------------------------
+# ---- Claude (exact via the OAuth usage endpoint; ccusage as fallback) ------
+USAGE_CACHE = os.path.expanduser(f"~/.local/state/{APP}/usage-api.json")
+
+
+def _claude_token():
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=5).stdout
+        d = json.loads(out)
+        return (d.get("claudeAiOauth") or d).get("accessToken")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def read_claude_api():
+    """Exact usage from the same endpoint Claude Code's /usage screen reads.
+    Cached ~2 min so we don't hammer it; returns None on any failure."""
+    data = None
+    try:
+        if time.time() - os.path.getmtime(USAGE_CACHE) < 110:
+            data = json.load(open(USAGE_CACHE))
+    except (OSError, ValueError):
+        data = None
+    if data is None:
+        tok = _claude_token()
+        if not tok:
+            return None
+        req = urllib.request.Request(
+            "https://api.anthropic.com/api/oauth/usage",
+            headers={"Authorization": f"Bearer {tok}",
+                     "anthropic-beta": "oauth-2025-04-20",
+                     "Content-Type": "application/json",
+                     "User-Agent": "usage-bar (oauth, cli)"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.loads(r.read().decode())
+            os.makedirs(os.path.dirname(USAGE_CACHE), exist_ok=True)
+            json.dump(data, open(USAGE_CACHE, "w"))
+        except Exception:
+            return None
+    windows = []
+    for key, label in (("five_hour", "5h"), ("seven_day", "wk")):
+        b = data.get(key) or {}
+        if b.get("utilization") is not None:
+            windows.append({"label": label, "pct": round(b["utilization"]),
+                            "resets": _iso_epoch(b.get("resets_at"))})
+    scoped = []
+    for lim in data.get("limits") or []:
+        model = ((lim.get("scope") or {}).get("model") or {}).get("display_name")
+        if model and lim.get("group") == "weekly":
+            scoped.append({"name": model, "pct": round(lim.get("percent") or 0),
+                           "resets": _iso_epoch(lim.get("resets_at")),
+                           "critical": lim.get("severity") == "critical"})
+    return {"ok": True, "exact": True, "windows": windows, "scoped": scoped} if windows else None
+
+
 def read_claude():
+    api = read_claude_api()
+    if api is not None:
+        return api
+    c = read_claude_ccusage()
+    if not c.get("ok"):
+        return {"ok": False}
+    return {"ok": True, "exact": False, "scoped": [],
+            "expected_pct": c.get("expected_pct"), "idle": c.get("idle", False),
+            "windows": [{"label": "5h", "pct": c.get("pct", 0), "resets": c.get("resets")}]}
+
+
+# ---- Claude usage estimate via ccusage (fallback) --------------------------
+def read_claude_ccusage():
     try:
         # launchd gives us a minimal PATH; ccusage is a node script and needs
         # node on PATH, so inject the ccusage/node bin dir.
@@ -269,14 +344,23 @@ def main():
                                 "resets": est.get("reset"), "est": True})
     cdx_windows.sort(key=lambda w: 0 if w["label"] == "5h" else 1)  # 5h first
 
-    claude_ok = cld.get("ok") and not cld.get("empty")
+    claude_ok = bool(cld.get("ok") and cld.get("windows"))
+    cld_windows = cld.get("windows", []) if claude_ok else []
+    cld_scoped = cld.get("scoped", []) if claude_ok else []
+    cld_exact = cld.get("exact", False)
 
-    # ---- notifications: only ENFORCED limits alert (exact Codex windows +
-    #      Claude 5h). The estimates are display-only, so no false alarms. ----
+    # ---- notifications: enforced Codex windows + all exact Claude limits
+    #      (5h, weekly, and per-model scoped like Fable). Rough estimates don't. ----
     notify_items = [(f"codex-{w['label']}", f"Codex {disp(w['label'])}", w["pct"])
                     for w in cdx_windows if not w.get("est")]
     if claude_ok:
-        notify_items.append(("claude-5h", "Claude 5h", cld["pct"]))
+        for w in cld_windows:
+            if cld_exact:
+                notify_items.append((f"claude-{w['label']}", f"Claude {disp(w['label'])}", w["pct"]))
+        if not cld_exact:
+            notify_items.append(("claude-5h", "Claude 5h", cld_windows[0]["pct"]))
+        for s in cld_scoped:
+            notify_items.append((f"claude-{s['name']}", f"Claude {s['name']}", s["pct"]))
     maybe_notify(notify_items)
 
     # ---- menu-bar title: each tool's 5h window (fast, session-level, and
@@ -288,7 +372,12 @@ def main():
     cdx_5h = window_pct(cdx_windows, "5h")
     cdx_pct = cdx_5h if cdx_5h is not None else window_pct(cdx_windows, "wk")
     cdx_worst = max([w["pct"] for w in cdx_windows], default=None)
-    cld_pct = cld["pct"] if claude_ok else None   # 0 == idle (window full)
+    # Claude menu-bar number = 5h; dot colour = worst OVERALL window (5h/weekly),
+    # NOT the per-model scoped ones (so a maxed Fable doesn't falsely go red).
+    cld_pct = window_pct(cld_windows, "5h")
+    if cld_pct is None and cld_windows:
+        cld_pct = cld_windows[0]["pct"]
+    cld_worst = max([w["pct"] for w in cld_windows], default=None)
 
     def left(pct):                       # battery-style: how much headroom remains
         return max(0, 100 - pct)
@@ -301,7 +390,7 @@ def main():
     def seg(name, num_pct):
         return f"● {name}:{'—' if num_pct is None else left(num_pct)}"
 
-    dots = f"{dot_hex(cdx_worst)},{dot_hex(cld_pct)}"
+    dots = f"{dot_hex(cdx_worst)},{dot_hex(cld_worst)}"
     print(f"{seg('Cdx', cdx_pct)}  {seg('Cld', cld_pct)} | dots={dots}")
     print("---")
 
@@ -324,16 +413,26 @@ def main():
     # Claude section
     print("Claude |")
     if claude_ok:
-        tail = ("idle — 5h window full" if cld.get("idle")
-                else (fmt_reset(cld.get("resets")) or "trailing 5h"))
-        print(wrow(cld["pct"], "5h", True, tail))
-        exp = cld.get("expected_pct")
-        if exp is not None:
-            print(f"  you usually use ~{exp}% of a 5h block | color=#888 size=11")
-        else:
-            print("  estimate, vs your peak 5h block | color=#888 size=11")
+        for w in cld_windows:
+            if cld_exact:
+                tail = fmt_reset(w["resets"])
+            elif cld.get("idle"):
+                tail = "idle — 5h window full"
+            else:
+                tail = fmt_reset(w["resets"]) or "trailing 5h"
+            print(wrow(w["pct"], disp(w["label"]), not cld_exact, tail))
+        for s in cld_scoped:
+            r = fmt_reset(s["resets"])
+            crit = s.get("critical") or left(s["pct"]) == 0
+            tail = (f"maxed · {r}" if r else "maxed") if crit else r
+            print(wrow(s["pct"], s["name"], False, tail))
+        if not cld_exact:
+            exp = cld.get("expected_pct")
+            note = (f"you usually use ~{exp}% of a 5h block" if exp is not None
+                    else "estimate, vs your peak 5h block")
+            print(f"  {note} | color=#888 size=11")
     else:
-        print("  ccusage unavailable (npm i -g ccusage) | color=#888 size=11")
+        print("  Claude usage unavailable | color=#888 size=11")
 
     print("---")
     print(f"warn at {100 - WARN}% left   ·   alert at {100 - ALERT}% left | color=#888 size=11")
