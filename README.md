@@ -80,7 +80,7 @@ A ~60-line Swift shell (`NSStatusItem`, no Dock icon) runs a Python "brain" ever
 
 ## Limitations
 
-- Everything shown is exact; the only estimate is the `ccusage` **fallback** used if Claude's usage endpoint is unavailable.
+- Everything shown is exact. Codex reads local files, so it has no network/token failure mode. For Claude (a network call to the usage endpoint), a transient failure keeps serving the last-good exact numbers for ~20 min; only a sustained outage drops the Claude side to a rougher `ccusage` estimate (marked `~`).
 - The Claude usage endpoint is **undocumented** — it's the one Claude Code itself uses, but Anthropic could change it, at which point the app falls back to that `ccusage` estimate.
 - Depends on Codex/Claude local formats and that endpoint; a future change to either could require an update.
 - Because notifications fire through `osascript`, the banner's sender label reads as *Script Editor* rather than *usage-bar* (avoiding that needs a signed `.app` bundle).
