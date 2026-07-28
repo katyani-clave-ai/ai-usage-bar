@@ -136,29 +136,39 @@ def _claude_token():
 
 def read_claude_api():
     """Exact usage from the same endpoint Claude Code's /usage screen reads.
-    Cached ~2 min so we don't hammer it; returns None on any failure."""
-    data = None
+    Cached ~2 min. On a failed refresh it keeps serving the last good response
+    for up to 20 min (so a token/network blip doesn't drop us to the estimate
+    and silently lose per-model limits). Returns None only with no usable data."""
+    cached, mtime = None, 0
     try:
-        if time.time() - os.path.getmtime(USAGE_CACHE) < 110:
-            data = json.load(open(USAGE_CACHE))
+        cached = json.load(open(USAGE_CACHE))
+        mtime = os.path.getmtime(USAGE_CACHE)
     except (OSError, ValueError):
-        data = None
+        cached = None
+    age = (time.time() - mtime) if cached is not None else None
+    data = cached if (cached is not None and age < 110) else None
     if data is None:
+        fetched = None
         tok = _claude_token()
-        if not tok:
-            return None
-        req = urllib.request.Request(
-            "https://api.anthropic.com/api/oauth/usage",
-            headers={"Authorization": f"Bearer {tok}",
-                     "anthropic-beta": "oauth-2025-04-20",
-                     "Content-Type": "application/json",
-                     "User-Agent": "usage-bar (oauth, cli)"})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as r:
-                data = json.loads(r.read().decode())
-            os.makedirs(os.path.dirname(USAGE_CACHE), exist_ok=True)
-            json.dump(data, open(USAGE_CACHE, "w"))
-        except Exception:
+        if tok:
+            req = urllib.request.Request(
+                "https://api.anthropic.com/api/oauth/usage",
+                headers={"Authorization": f"Bearer {tok}",
+                         "anthropic-beta": "oauth-2025-04-20",
+                         "Content-Type": "application/json",
+                         "User-Agent": "usage-bar (oauth, cli)"})
+            try:
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    fetched = json.loads(r.read().decode())
+                os.makedirs(os.path.dirname(USAGE_CACHE), exist_ok=True)
+                json.dump(fetched, open(USAGE_CACHE, "w"))
+            except Exception:
+                fetched = None
+        if fetched is not None:
+            data = fetched
+        elif cached is not None and age < 1200:   # sticky: last good, <20 min old
+            data = cached
+        else:
             return None
     windows = []
     for key, label in (("five_hour", "5h"), ("seven_day", "wk")):
