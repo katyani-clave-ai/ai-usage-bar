@@ -345,8 +345,10 @@ def main():
     print("---")
 
     def wrow(pct, label, est, tail):     # dropdown data row
-        return (f"  {ring(pct)}  {label}{' ~' if est else ''}   {left(pct)}% left   ·   {tail}"
-                f" | ring={color_for(pct)}")
+        row = f"  {ring(pct)}  {label}{' ~' if est else ''}   {left(pct)}% left"
+        if tail:
+            row += f"   ·   {tail}"
+        return row + f" | ring={color_for(pct)}"
 
     # Codex section
     plan = f" · {cdx.get('plan')}" if cdx.get("plan") else ""
@@ -372,6 +374,8 @@ def main():
                 tail = fmt_reset(w["resets"]) or "trailing 5h"
             print(wrow(w["pct"], disp(w["label"]), not cld_exact, tail))
         for s in cld_scoped:
+            if level(s["pct"]) < 1 and not s.get("critical"):
+                continue   # model still has plenty left -> don't clutter the list
             r = fmt_reset(s["resets"])
             crit = s.get("critical") or left(s["pct"]) == 0
             tail = (f"maxed · {r}" if r else "maxed") if crit else r
